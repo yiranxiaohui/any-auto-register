@@ -109,7 +109,7 @@ def get_moemail_domains():
     try:
         headers = {}
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            headers["X-API-Key"] = api_key
         r = requests.get(f"{api_url}/api/config", headers=headers, timeout=10)
         data = r.json()
         raw = data.get("emailDomains", "")
