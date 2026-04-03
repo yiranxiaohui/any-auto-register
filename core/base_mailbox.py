@@ -1664,15 +1664,27 @@ class MoeMailMailbox(BaseMailbox):
             pass
         return []
 
+    def _parse_domain_list(self, value: str) -> list[str]:
+        """解析域名配置，兼容 JSON 数组和逗号分隔字符串"""
+        text = str(value or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(d).strip() for d in parsed if str(d).strip()]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return [d.strip() for d in text.split(",") if d.strip()]
+
     def _pick_domain(self) -> str:
-        if self.domain:
-            domains = [d.strip() for d in self.domain.split(",") if d.strip()]
-            if domains:
-                return random.choice(domains)
+        domains = self._parse_domain_list(self.domain)
+        if domains:
+            return random.choice(domains)
         domains = self._fetch_domains()
         if domains:
             return random.choice(domains)
-        return "sall.cc"
+        raise RuntimeError("MoeMail 未配置域名且无法从 API 获取可用域名")
 
     # ---- API Key 模式 ----
 
