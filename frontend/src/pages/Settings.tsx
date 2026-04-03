@@ -622,10 +622,6 @@ function MoeMailDomainSection({ form }: { form: any }) {
     setLoading(true)
     setError('')
     try {
-      const apiData = await apiFetch('/config')
-      const apiUrl = apiData.moemail_api_url || 'https://sall.cc'
-      const apiKey = apiData.moemail_api_key || ''
-
       // 先保存当前输入的 API URL 和 Key，防止 fetchDomains 后丢失
       const currentUrl = form.getFieldValue('moemail_api_url')
       const currentKey = form.getFieldValue('moemail_api_key')
