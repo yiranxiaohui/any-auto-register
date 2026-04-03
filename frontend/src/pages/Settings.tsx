@@ -1245,10 +1245,12 @@ export default function Settings() {
             <Form form={form} layout="vertical">
               {activeTab === 'captcha' ? <SolverStatus /> : null}
               {currentTab.sections.map((section) => (
-                <ConfigSection key={section.title} section={section} />
+                <React.Fragment key={section.title}>
+                  <ConfigSection section={section} />
+                  {activeTab === 'mailbox' && section.title === 'MoeMail' ? <MoeMailDomainSection form={form} /> : null}
+                </React.Fragment>
               ))}
               {activeTab === 'mailbox' ? <CFWorkerDomainPoolSection form={form} /> : null}
-              {activeTab === 'mailbox' ? <MoeMailDomainSection form={form} /> : null}
               <Button type="primary" icon={<SaveOutlined />} onClick={save} loading={saving} block>
                 {saved ? '已保存 ✓' : '保存配置'}
               </Button>
