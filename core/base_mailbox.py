@@ -2,6 +2,7 @@
 
 import json
 import random
+import string
 import threading
 import time
 
@@ -2599,165 +2600,96 @@ class CFWorkerMailbox(BaseMailbox):
 
 
 class MoeMailMailbox(BaseMailbox):
-    """MoeMail (sall.cc) 邮箱服务 - 支持 API Key 或自动注册账号生成临时邮箱"""
+    """MoeMail 邮箱服务 - 支持 API Key（推荐）和自动注册两种模式"""
 
-    def __init__(
-        self, api_url: str = "https://sall.cc", api_key: str = "", domain: str = "", proxy: str = None
-    ):
+    def __init__(self, api_url: str = "https://sall.cc", api_key: str = "", domain: str = "", proxy: str = None):
         self.api = api_url.rstrip("/")
         self.api_key = str(api_key or "").strip()
-        self.domain = domain
+        self.domain = str(domain or "").strip()
         self.proxy = build_requests_proxy_config(proxy)
-        self._session_token = None
         self._email = None
-        self._session = None
+        # API Key 模式不需要 session
+        self._use_api_key = bool(self.api_key)
 
-    def _api_headers(self) -> dict:
-        if not self.api_key:
-            return {}
-        return {"X-API-Key": self.api_key}
-
-    def _create_session(self) -> bool:
-        """创建会话：使用 API Key 或注册登录"""
-        import requests, random, string
-
-        s = requests.Session()
-        s.proxies = self.proxy
-        ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-
-        # 如果有 API Key，直接使用
+    def _headers(self) -> dict:
+        h = {"accept": "application/json", "content-type": "application/json"}
         if self.api_key:
-            s.headers.update({
-                "user-agent": ua,
-                "X-API-Key": self.api_key,
-            })
-            self._session = s
-            print(f"[MoeMail] 使用 API Key 认证")
-            return True
+            h["X-API-Key"] = self.api_key
+        return h
 
-        # 否则使用注册登录方式
-        s.headers.update(
-            {"user-agent": ua, "origin": self.api, "referer": f"{self.api}/zh-CN/login"}
+    def _request(self, method: str, path: str, **kwargs) -> "requests.Response":
+        import requests
+        return requests.request(
+            method, f"{self.api}{path}", headers=self._headers(),
+            proxies=self.proxy, timeout=15, **kwargs,
         )
-        s.headers.update(self._api_headers())
-        # 注册
-        username = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
-        password = "Test" + "".join(random.choices(string.digits, k=8)) + "!"
-        print(f"[MoeMail] 注册账号: {username} / {password}")
-        r_reg = s.post(
-            f"{self.api}/api/auth/register",
-            json={"username": username, "password": password, "turnstileToken": ""},
-            timeout=15,
-        )
-        print(f"[MoeMail] 注册结果: {r_reg.status_code} {r_reg.text[:80]}")
-        # 获取 CSRF
-        csrf_r = s.get(f"{self.api}/api/auth/csrf", timeout=10)
-        csrf = csrf_r.json().get("csrfToken", "")
-        # 登录
-        s.post(
-            f"{self.api}/api/auth/callback/credentials",
-            headers={"content-type": "application/x-www-form-urlencoded"},
-            data=f"username={username}&password={password}&csrfToken={csrf}&redirect=false&callbackUrl={self.api}",
-            allow_redirects=True,
-            timeout=15,
-        )
-        self._session = s
-        for cookie in s.cookies:
-            if "session-token" in cookie.name:
-                self._session_token = cookie.value
-                print(f"[MoeMail] 登录成功")
-                return True
-        print(f"[MoeMail] 登录失败，cookies: {[c.name for c in s.cookies]}")
-        return False
 
-    def get_email(self) -> MailboxAccount:
-        # 每次调用都重新创建会话，保证邮箱唯一
-        self._session_token = None
-        if not self._create_session():
-            raise RuntimeError("[MoeMail] 创建会话失败")
-
-        import random, string
-
-        name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-        # 获取域名：优先使用配置的域名，否则从 API 获取随机选择
-        domain = None
-        if self.domain:
-            domain = self.domain
-            print(f"[MoeMail] 使用配置域名: {domain}")
-        else:
-            try:
-                cfg_r = self._session.get(
-                    f"{self.api}/api/config", headers=self._api_headers(), timeout=10
-                )
-                cfg_data = cfg_r.json()
-                # 尝试从不同字段获取域名
-                domains = None
-                if isinstance(cfg_data.get("domains"), list):
-                    domains = cfg_data.get("domains")
-                elif isinstance(cfg_data.get("emailDomains"), list):
-                    domains = cfg_data.get("emailDomains")
-                elif isinstance(cfg_data.get("emailDomains"), str):
-                    domains = [d.strip() for d in cfg_data.get("emailDomains", "").split(",") if d.strip()]
-
-                if domains:
-                    domain = random.choice(domains)
-            except Exception as e:
-                print(f"[MoeMail] 获取域名失败: {e}")
-
-        if not domain:
-            domain = "sall.cc"
-        r = self._session.post(
-            f"{self.api}/api/emails/generate",
-            headers=self._api_headers(),
-            json={"name": name, "domain": domain, "expiryTime": 86400000},
-            timeout=15,
-        )
-        print(f"[MoeMail] 响应状态: {r.status_code}, 响应内容: {r.text}")
-        data = r.json()
-        self._email = data.get("email", data.get("address", ""))
-        email_id = data.get("id", "")
-        print(
-            f"[MoeMail] 生成邮箱: {self._email} id={email_id} domain={domain} status={r.status_code}"
-        )
-        if not email_id:
-            print(f"[MoeMail] 生成失败: {data}")
-            raise RuntimeError(f"[MoeMail] 生成邮箱失败: {data}")
-        if not self._email:
-            raise RuntimeError(f"[MoeMail] 邮箱地址为空: {data}")
-        self._email_count = getattr(self, "_email_count", 0) + 1
-        return MailboxAccount(email=self._email, account_id=str(email_id))
-
-    def get_current_ids(self, account: MailboxAccount) -> set:
+    def _fetch_domains(self) -> list[str]:
+        """从 API 获取可用域名列表"""
         try:
-            r = self._session.get(
-                f"{self.api}/api/emails/{account.account_id}",
-                headers=self._api_headers(),
-                timeout=10,
-            )
+            r = self._request("GET", "/api/config")
+            raw = r.json().get("emailDomains", "")
+            if isinstance(raw, str):
+                return [d.strip() for d in raw.split(",") if d.strip()]
+            if isinstance(raw, list):
+                return [str(d).strip() for d in raw if d]
+        except Exception:
+            pass
+        return []
+
+    def _parse_domain_list(self, value: str) -> list[str]:
+        """解析域名配置，兼容 JSON 数组和逗号分隔字符串"""
+        text = str(value or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(d).strip() for d in parsed if str(d).strip()]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return [d.strip() for d in text.split(",") if d.strip()]
+
+    def _pick_domain(self) -> str:
+        domains = self._parse_domain_list(self.domain)
+        if domains:
+            return random.choice(domains)
+        domains = self._fetch_domains()
+        if domains:
+            return random.choice(domains)
+        raise RuntimeError("MoeMail 未配置域名且无法从 API 获取可用域名")
+
+    # ---- API Key 模式 ----
+
+    def _api_get_email(self) -> MailboxAccount:
+        name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
+        domain = self._pick_domain()
+        r = self._request("POST", "/api/emails/generate", json={
+            "name": name, "domain": domain, "expiryTime": 86400000,
+        })
+        data = r.json()
+        email = data.get("email") or data.get("address", "")
+        email_id = str(data.get("id", ""))
+        if not email:
+            raise RuntimeError(f"[MoeMail] 生成邮箱失败: {data}")
+        self._log(f"[MoeMail] 生成邮箱: {email} id={email_id} domain={domain}")
+        return MailboxAccount(email=email, account_id=email_id)
+
+    def _api_get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            r = self._request("GET", f"/api/emails/{account.account_id}")
+>>>>>>> 8d807352bd9b8412b80594372c3387601ac19cc9
             return {str(m.get("id", "")) for m in r.json().get("messages", [])}
         except Exception:
             return set()
 
-    def wait_for_code(
-        self,
-        account: MailboxAccount,
-        keyword: str = "",
-        timeout: int = 120,
-        before_ids: set = None,
-        code_pattern: str = None,
-        **kwargs,
-    ) -> str:
+    def _api_wait_for_code(self, account, keyword, timeout, before_ids, code_pattern, **kwargs):
         import re
-
         seen = set(before_ids or [])
 
         def poll_once() -> Optional[str]:
             try:
-                r = self._session.get(
-                    f"{self.api}/api/emails/{account.account_id}",
-                    headers=self._api_headers(),
-                    timeout=10,
-                )
+                r = self._request("GET", f"/api/emails/{account.account_id}")
                 msgs = r.json().get("messages", [])
                 for msg in msgs:
                     mid = str(msg.get("id", ""))
@@ -2765,19 +2697,10 @@ class MoeMailMailbox(BaseMailbox):
                         continue
                     seen.add(mid)
                     body = (
-                        str(
-                            msg.get("content")
-                            or msg.get("text")
-                            or msg.get("body")
-                            or msg.get("html")
-                            or ""
-                        )
-                        + " "
-                        + str(msg.get("subject") or "")
+                        str(msg.get("content") or msg.get("text") or msg.get("body") or msg.get("html") or "")
+                        + " " + str(msg.get("subject") or "")
                     )
-                    body = re.sub(
-                        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "", body
-                    )
+                    body = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "", body)
                     code = self._safe_extract(body, code_pattern)
                     if code:
                         return code
@@ -2785,11 +2708,91 @@ class MoeMailMailbox(BaseMailbox):
                 pass
             return None
 
-        return self._run_polling_wait(
-            timeout=timeout,
-            poll_interval=3,
-            poll_once=poll_once,
+        return self._run_polling_wait(timeout=timeout, poll_interval=3, poll_once=poll_once)
+
+    # ---- Session 模式（无 API Key 时的兜底） ----
+
+    def _session_get_email(self) -> MailboxAccount:
+        import requests
+        s = requests.Session()
+        s.proxies = self.proxy
+        ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+        s.headers.update({"user-agent": ua, "origin": self.api, "referer": f"{self.api}/zh-CN/login"})
+        # 注册
+        username = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        password = "Test" + "".join(random.choices(string.digits, k=8)) + "!"
+        self._log(f"[MoeMail] 注册账号: {username}")
+        s.post(f"{self.api}/api/auth/register", json={"username": username, "password": password, "turnstileToken": ""}, timeout=15)
+        csrf_r = s.get(f"{self.api}/api/auth/csrf", timeout=10)
+        csrf = csrf_r.json().get("csrfToken", "")
+        s.post(
+            f"{self.api}/api/auth/callback/credentials",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            data=f"username={username}&password={password}&csrfToken={csrf}&redirect=false&callbackUrl={self.api}",
+            allow_redirects=True, timeout=15,
         )
+        self._session = s
+        domain = self._pick_domain()
+        name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
+        r = s.post(f"{self.api}/api/emails/generate", json={"name": name, "domain": domain, "expiryTime": 86400000}, timeout=15)
+        data = r.json()
+        email = data.get("email") or data.get("address", "")
+        email_id = str(data.get("id", ""))
+        if not email:
+            raise RuntimeError(f"[MoeMail] 生成邮箱失败: {data}")
+        self._log(f"[MoeMail] 生成邮箱: {email} id={email_id} domain={domain}")
+        return MailboxAccount(email=email, account_id=email_id)
+
+    def _session_get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            r = self._session.get(f"{self.api}/api/emails/{account.account_id}", timeout=10)
+            return {str(m.get("id", "")) for m in r.json().get("messages", [])}
+        except Exception:
+            return set()
+
+    def _session_wait_for_code(self, account, keyword, timeout, before_ids, code_pattern, **kwargs):
+        import re
+        seen = set(before_ids or [])
+
+        def poll_once() -> Optional[str]:
+            try:
+                r = self._session.get(f"{self.api}/api/emails/{account.account_id}", timeout=10)
+                msgs = r.json().get("messages", [])
+                for msg in msgs:
+                    mid = str(msg.get("id", ""))
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    body = (
+                        str(msg.get("content") or msg.get("text") or msg.get("body") or msg.get("html") or "")
+                        + " " + str(msg.get("subject") or "")
+                    )
+                    body = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "", body)
+                    code = self._safe_extract(body, code_pattern)
+                    if code:
+                        return code
+            except Exception:
+                pass
+            return None
+
+        return self._run_polling_wait(timeout=timeout, poll_interval=3, poll_once=poll_once)
+
+    # ---- 统一入口 ----
+
+    def get_email(self) -> MailboxAccount:
+        if self._use_api_key:
+            return self._api_get_email()
+        return self._session_get_email()
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        if self._use_api_key:
+            return self._api_get_current_ids(account)
+        return self._session_get_current_ids(account)
+
+    def wait_for_code(self, account, keyword="", timeout=120, before_ids=None, code_pattern=None, **kwargs):
+        if self._use_api_key:
+            return self._api_wait_for_code(account, keyword, timeout, before_ids, code_pattern, **kwargs)
+        return self._session_wait_for_code(account, keyword, timeout, before_ids, code_pattern, **kwargs)
 
 
 class LuckMailMailbox(BaseMailbox):

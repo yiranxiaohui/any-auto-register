@@ -131,6 +131,28 @@ def get_config():
     return {k: all_cfg.get(k, "") for k in CONFIG_KEYS}
 
 
+@router.get("/moemail/domains")
+def get_moemail_domains():
+    """从 MoeMail API 拉取可用域名列表"""
+    import requests
+
+    all_cfg = config_store.get_all()
+    api_url = (all_cfg.get("moemail_api_url") or "https://sall.cc").rstrip("/")
+    api_key = all_cfg.get("moemail_api_key") or ""
+
+    try:
+        headers = {}
+        if api_key:
+            headers["X-API-Key"] = api_key
+        r = requests.get(f"{api_url}/api/config", headers=headers, timeout=10)
+        data = r.json()
+        raw = data.get("emailDomains", "")
+        domains = [d.strip() for d in raw.split(",") if d.strip()] if isinstance(raw, str) else []
+        return {"domains": domains}
+    except Exception as e:
+        return {"domains": [], "error": str(e)}
+
+
 @router.put("")
 def update_config(body: ConfigUpdate):
     # 只允许更新已知 key

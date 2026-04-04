@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { App, Card, Form, Input, Select, Button, message, Tabs, Space, Tag, Typography, Modal, QRCode, Switch, Alert } from 'antd'
 import {
   SaveOutlined,
@@ -109,8 +109,7 @@ const TAB_ITEMS = [
         desc: '自动注册账号并生成临时邮箱',
         fields: [
           { key: 'moemail_api_url', label: 'API URL', placeholder: 'https://sall.cc' },
-          { key: 'moemail_api_key', label: 'API Key（可选）', secret: true },
-          { key: 'moemail_domain', label: '邮箱域名（可选）', placeholder: '留空则随机选择' },
+          { key: 'moemail_api_key', label: 'API Key', secret: true, placeholder: '留空则自动注册账号' },
         ],
       },
       {
@@ -874,6 +873,106 @@ function SolverStatus() {
           重启 Solver
         </Button>
       </div>
+    </Card>
+  )
+}
+
+function MoeMailDomainSection({ form }: { form: any }) {
+  const [remoteDomains, setRemoteDomains] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const fetchDomains = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      // 先保存当前输入的 API URL 和 Key，防止 fetchDomains 后丢失
+      const currentUrl = form.getFieldValue('moemail_api_url')
+      const currentKey = form.getFieldValue('moemail_api_key')
+      if (currentUrl) {
+        await apiFetch('/config', {
+          method: 'PUT',
+          body: JSON.stringify({ data: { moemail_api_url: currentUrl, moemail_api_key: currentKey } }),
+        })
+      }
+
+      const d = await apiFetch('/config/moemail/domains')
+      setRemoteDomains(d.domains || [])
+      if (!d.domains?.length) {
+        setError(d.error || '未获取到可用域名')
+      }
+    } catch (e: any) {
+      setError(e?.message || '获取域名失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const selectedDomains = Form.useWatch('moemail_domain', form) || []
+
+  return (
+    <Card
+      title="MoeMail 域名选择"
+      extra={
+        <span style={{ fontSize: 12, color: '#7a8ba3' }}>
+          从 MoeMail 服务获取可用域名并选择，留空则自动随机
+        </span>
+      }
+      style={{ marginBottom: 16 }}
+    >
+      <Form.Item name="moemail_domain" hidden>
+        <Input />
+      </Form.Item>
+      <Space style={{ marginBottom: 16 }}>
+        <Button onClick={fetchDomains} loading={loading}>
+          获取可用域名
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          请先填写上方 API URL 和 API Key，再点击获取
+        </Typography.Text>
+      </Space>
+
+      {error && (
+        <Typography.Text type="warning" style={{ display: 'block', marginBottom: 8 }}>
+          {error}
+        </Typography.Text>
+      )}
+
+      {remoteDomains.length > 0 && (
+        <>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>点击选择域名</div>
+          <Space wrap>
+            {remoteDomains.map((domain) => (
+              <Tag.CheckableTag
+                key={domain}
+                checked={selectedDomains.includes(domain)}
+                onChange={(checked) => {
+                  const current = [...selectedDomains]
+                  if (checked) {
+                    if (!current.includes(domain)) {
+                      form.setFieldValue('moemail_domain', [...current, domain])
+                    }
+                  } else {
+                    form.setFieldValue(
+                      'moemail_domain',
+                      current.filter((d: string) => d !== domain),
+                    )
+                  }
+                }}
+              >
+                {domain}
+              </Tag.CheckableTag>
+            ))}
+          </Space>
+          {selectedDomains.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                已选域名：{selectedDomains.join(', ')}
+              </Typography.Text>
+            </div>
+          )}
+        </>
+      )}
     </Card>
   )
 }
@@ -1701,6 +1800,7 @@ export default function Settings() {
       data.cfworker_random_subdomain = parseBooleanConfigValue(data.cfworker_random_subdomain)
       data.cfworker_random_name_subdomain = parseBooleanConfigValue(data.cfworker_random_name_subdomain)
       data.contribution_enabled = parseBooleanConfigValue(data.contribution_enabled)
+      data.moemail_domain = parseStoredDomainList(data.moemail_domain)
       form.setFieldsValue(data)
     })
   }, [form])
@@ -1727,6 +1827,10 @@ export default function Settings() {
       values.cfworker_random_name_subdomain = parseBooleanConfigValue(values.cfworker_random_name_subdomain)
       values.contribution_enabled = parseBooleanConfigValue(values.contribution_enabled)
 
+      // moemail_domain: 数组 -> JSON
+      const moemailDomains = normalizeDomainList(values.moemail_domain)
+      values.moemail_domain = JSON.stringify(moemailDomains)
+
       await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
       form.setFieldsValue({
         cfworker_domains: domains,
@@ -1735,6 +1839,7 @@ export default function Settings() {
         cfworker_random_subdomain: values.cfworker_random_subdomain,
         cfworker_random_name_subdomain: values.cfworker_random_name_subdomain,
         contribution_enabled: values.contribution_enabled,
+        moemail_domain: moemailDomains,
       })
       message.success('保存成功')
       setSaved(true)
@@ -1784,7 +1889,10 @@ export default function Settings() {
                 <>
                   {activeTab === 'captcha' ? <SolverStatus /> : null}
                   {currentTab.sections.map((section) => (
-                    <ConfigSection key={section.title} section={section} />
+                    <React.Fragment key={section.title}>
+                      <ConfigSection section={section} />
+                      {activeTab === 'mailbox' && section.title === 'MoeMail' ? <MoeMailDomainSection form={form} /> : null}
+                    </React.Fragment>
                   ))}
                   {activeTab === 'mailbox' ? <AppleMailPoolImportSection form={form} /> : null}
                   {activeTab === 'mailbox' ? <CFWorkerDomainPoolSection form={form} /> : null}
