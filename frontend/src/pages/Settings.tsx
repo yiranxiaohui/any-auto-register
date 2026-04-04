@@ -109,7 +109,8 @@ const TAB_ITEMS = [
         desc: '自动注册账号并生成临时邮箱',
         fields: [
           { key: 'moemail_api_url', label: 'API URL', placeholder: 'https://sall.cc' },
-          { key: 'moemail_api_key', label: 'API Key', secret: true },
+          { key: 'moemail_api_key', label: 'API Key（可选）', secret: true },
+          { key: 'moemail_domain', label: '邮箱域名（可选）', placeholder: '留空则随机选择' },
         ],
       },
       {

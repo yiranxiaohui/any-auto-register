@@ -272,6 +272,7 @@ def create_mailbox(
         return MoeMailMailbox(
             api_url=extra.get("moemail_api_url", "https://sall.cc"),
             api_key=extra.get("moemail_api_key", ""),
+            domain=extra.get("moemail_domain", ""),
             proxy=proxy,
         )
     elif provider == "maliapi":
@@ -2598,28 +2599,43 @@ class CFWorkerMailbox(BaseMailbox):
 
 
 class MoeMailMailbox(BaseMailbox):
-    """MoeMail (sall.cc) 邮箱服务 - 自动注册账号并生成临时邮箱"""
+    """MoeMail (sall.cc) 邮箱服务 - 支持 API Key 或自动注册账号生成临时邮箱"""
 
     def __init__(
-        self, api_url: str = "https://sall.cc", api_key: str = "", proxy: str = None
+        self, api_url: str = "https://sall.cc", api_key: str = "", domain: str = "", proxy: str = None
     ):
         self.api = api_url.rstrip("/")
         self.api_key = str(api_key or "").strip()
+        self.domain = domain
         self.proxy = build_requests_proxy_config(proxy)
         self._session_token = None
         self._email = None
+        self._session = None
 
     def _api_headers(self) -> dict:
         if not self.api_key:
             return {}
         return {"X-API-Key": self.api_key}
 
-    def _register_and_login(self) -> str:
+    def _create_session(self) -> bool:
+        """创建会话：使用 API Key 或注册登录"""
         import requests, random, string
 
         s = requests.Session()
         s.proxies = self.proxy
         ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+
+        # 如果有 API Key，直接使用
+        if self.api_key:
+            s.headers.update({
+                "user-agent": ua,
+                "X-API-Key": self.api_key,
+            })
+            self._session = s
+            print(f"[MoeMail] 使用 API Key 认证")
+            return True
+
+        # 否则使用注册登录方式
         s.headers.update(
             {"user-agent": ua, "origin": self.api, "referer": f"{self.api}/zh-CN/login"}
         )
@@ -2650,38 +2666,53 @@ class MoeMailMailbox(BaseMailbox):
             if "session-token" in cookie.name:
                 self._session_token = cookie.value
                 print(f"[MoeMail] 登录成功")
-                return cookie.value
+                return True
         print(f"[MoeMail] 登录失败，cookies: {[c.name for c in s.cookies]}")
-        return ""
+        return False
 
     def get_email(self) -> MailboxAccount:
-        # 每次调用都重新注册新账号，保证邮箱唯一
+        # 每次调用都重新创建会话，保证邮箱唯一
         self._session_token = None
-        self._register_and_login()
+        if not self._create_session():
+            raise RuntimeError("[MoeMail] 创建会话失败")
+
         import random, string
 
         name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-        # 获取可用域名列表，随机选一个
-        domain = "sall.cc"
-        try:
-            cfg_r = self._session.get(
-                f"{self.api}/api/config", headers=self._api_headers(), timeout=10
-            )
-            domains = [
-                d.strip()
-                for d in cfg_r.json().get("emailDomains", "sall.cc").split(",")
-                if d.strip()
-            ]
-            if domains:
-                domain = random.choice(domains)
-        except Exception:
-            pass
+        # 获取域名：优先使用配置的域名，否则从 API 获取随机选择
+        domain = None
+        if self.domain:
+            domain = self.domain
+            print(f"[MoeMail] 使用配置域名: {domain}")
+        else:
+            try:
+                cfg_r = self._session.get(
+                    f"{self.api}/api/config", headers=self._api_headers(), timeout=10
+                )
+                cfg_data = cfg_r.json()
+                # 尝试从不同字段获取域名
+                domains = None
+                if isinstance(cfg_data.get("domains"), list):
+                    domains = cfg_data.get("domains")
+                elif isinstance(cfg_data.get("emailDomains"), list):
+                    domains = cfg_data.get("emailDomains")
+                elif isinstance(cfg_data.get("emailDomains"), str):
+                    domains = [d.strip() for d in cfg_data.get("emailDomains", "").split(",") if d.strip()]
+
+                if domains:
+                    domain = random.choice(domains)
+            except Exception as e:
+                print(f"[MoeMail] 获取域名失败: {e}")
+
+        if not domain:
+            domain = "sall.cc"
         r = self._session.post(
             f"{self.api}/api/emails/generate",
             headers=self._api_headers(),
             json={"name": name, "domain": domain, "expiryTime": 86400000},
             timeout=15,
         )
+        print(f"[MoeMail] 响应状态: {r.status_code}, 响应内容: {r.text}")
         data = r.json()
         self._email = data.get("email", data.get("address", ""))
         email_id = data.get("id", "")
@@ -2690,8 +2721,10 @@ class MoeMailMailbox(BaseMailbox):
         )
         if not email_id:
             print(f"[MoeMail] 生成失败: {data}")
-        if email_id:
-            self._email_count = getattr(self, "_email_count", 0) + 1
+            raise RuntimeError(f"[MoeMail] 生成邮箱失败: {data}")
+        if not self._email:
+            raise RuntimeError(f"[MoeMail] 邮箱地址为空: {data}")
+        self._email_count = getattr(self, "_email_count", 0) + 1
         return MailboxAccount(email=self._email, account_id=str(email_id))
 
     def get_current_ids(self, account: MailboxAccount) -> set:

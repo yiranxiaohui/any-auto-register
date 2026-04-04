@@ -646,6 +646,7 @@ export default function Accounts() {
         yescaptcha_key: cfg.yescaptcha_key,
         moemail_api_url: cfg.moemail_api_url,
         moemail_api_key: cfg.moemail_api_key,
+        moemail_domain: cfg.moemail_domain,
         skymail_api_base: cfg.skymail_api_base,
         skymail_token: cfg.skymail_token,
         skymail_domain: cfg.skymail_domain,

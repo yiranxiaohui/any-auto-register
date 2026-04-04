@@ -24,6 +24,7 @@ CONFIG_KEYS = [
     "freemail_domain",
     "moemail_api_url",
     "moemail_api_key",
+    "moemail_domain",
     "skymail_api_base",
     "skymail_token",
     "skymail_domain",
