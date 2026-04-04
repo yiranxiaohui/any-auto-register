@@ -532,12 +532,13 @@ function ConfigField({ field }: { field: FieldConfig }) {
   )
 }
 
-function ConfigSection({ section }: { section: SectionConfig }) {
+function ConfigSection({ section, children }: { section: SectionConfig; children?: React.ReactNode }) {
   return (
     <Card title={section.title} extra={section.desc && <span style={{ fontSize: 12, color: '#7a8ba3' }}>{section.desc}</span>} style={{ marginBottom: 16 }}>
       {section.fields.map((field) => (
         <ConfigField key={field.key} field={field} />
       ))}
+      {children}
     </Card>
   )
 }
@@ -911,15 +912,12 @@ function MoeMailDomainSection({ form }: { form: any }) {
   const selectedDomains = Form.useWatch('moemail_domain', form) || []
 
   return (
-    <Card
-      title="MoeMail 域名选择"
-      extra={
-        <span style={{ fontSize: 12, color: '#7a8ba3' }}>
-          从 MoeMail 服务获取可用域名并选择，留空则自动随机
-        </span>
-      }
-      style={{ marginBottom: 16 }}
-    >
+    <>
+      <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', margin: '16px 0' }} />
+      <div style={{ marginBottom: 8, fontWeight: 500 }}>域名选择</div>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+        从 MoeMail 服务获取可用域名并选择，留空则自动随机
+      </Typography.Text>
       <Form.Item name="moemail_domain" hidden>
         <Input />
       </Form.Item>
@@ -927,9 +925,6 @@ function MoeMailDomainSection({ form }: { form: any }) {
         <Button onClick={fetchDomains} loading={loading}>
           获取可用域名
         </Button>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          请先填写上方 API URL 和 API Key，再点击获取
-        </Typography.Text>
       </Space>
 
       {error && (
@@ -973,7 +968,7 @@ function MoeMailDomainSection({ form }: { form: any }) {
           )}
         </>
       )}
-    </Card>
+    </>
   )
 }
 
@@ -1889,10 +1884,9 @@ export default function Settings() {
                 <>
                   {activeTab === 'captcha' ? <SolverStatus /> : null}
                   {currentTab.sections.map((section) => (
-                    <React.Fragment key={section.title}>
-                      <ConfigSection section={section} />
+                    <ConfigSection key={section.title} section={section}>
                       {activeTab === 'mailbox' && section.title === 'MoeMail' ? <MoeMailDomainSection form={form} /> : null}
-                    </React.Fragment>
+                    </ConfigSection>
                   ))}
                   {activeTab === 'mailbox' ? <AppleMailPoolImportSection form={form} /> : null}
                   {activeTab === 'mailbox' ? <CFWorkerDomainPoolSection form={form} /> : null}
